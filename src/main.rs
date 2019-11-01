@@ -1,10 +1,12 @@
 use std::convert::Infallible;
 
+use futures::future::try_join;
 use hyper::{Body, Request, Response, Server, StatusCode};
 use hyper::service::{make_service_fn, service_fn};
-use hyper::header::{CONNECTION, UPGRADE, HeaderValue, SEC_WEBSOCKET_KEY};
+use hyper::header::HeaderValue;
 use hyper::upgrade::Upgraded;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio_io::{AsyncRead, AsyncWrite};
 
 mod utils;
 use utils::*;
@@ -35,21 +37,121 @@ fn hello() -> Response<Body> {
     response
 }
 
-async fn send_unmasked_single_frame_text(upgraded: &mut Upgraded, msg: &[u8]) -> Result<()> {
+async fn send_single_frame_text<T: AsyncWrite + Unpin>(upgraded: &mut T, msg: &[u8]) -> Result<()> {
     let first_byte: &[u8] = &[0x81];
     let encoded_length = get_length_bytes(msg.len());
     let payload = [first_byte, &encoded_length, msg].concat();
-    upgraded.write_all(&payload).await
+    upgraded.write_all(&payload).await?;
+    Ok(())
 }
 
-async fn send_unmasked_text(upgraded: &mut Upgraded, msg: &[u8]) -> Result<()> {
-    send_unmasked_single_frame_text(upgraded, msg).await
+async fn send_text<T: AsyncWrite + Unpin>(upgraded: &mut T, msg: &[u8]) -> Result<()> {
+    send_single_frame_text(upgraded, msg).await
 }
 
-async fn handle_upgraded_connection(mut upgraded: Upgraded) -> Result<()> {
-    send_unmasked_text(&mut upgraded, b"Hello from hyper!").await?;
-    send_unmasked_text(&mut upgraded, "Hello".repeat(100).as_bytes()).await?;
-    send_unmasked_text(&mut upgraded, "Hello".repeat(20000).as_bytes()).await?;
+async fn write_messages<T: AsyncWrite + Unpin>(mut write: T) -> Result<()> {
+    send_text(&mut write, b"Hello from hyper!").await?;
+    send_text(&mut write, "Hello".repeat(100).as_bytes()).await?;
+    send_text(&mut write, "Hello".repeat(20000).as_bytes()).await?;
+    Ok(())
+}
+
+enum Length {
+    U16,
+    U64,
+}
+
+async fn read_length<T: AsyncRead + Unpin>(kind: Length, read: &mut T) -> Result<usize> {
+    let length = match kind {
+        Length::U16 => {
+            let mut buf = [0u8; 2];
+            read.read_exact(&mut buf).await?;
+            u16::from_be_bytes(buf) as usize
+        }
+        Length::U64 => {
+            let mut buf = [0u8; 8];
+            read.read_exact(&mut buf).await?;
+            u64::from_be_bytes(buf) as usize
+        }
+    };
+    Ok(length)
+}
+
+async fn read_mask<T: AsyncRead + Unpin>(read: &mut T) -> Result<[u8; 4]> {
+    let mut mask_buf = [0u8; 4];
+    read.read_exact(&mut mask_buf).await?;
+    Ok(mask_buf)
+}
+
+async fn read_messages<T: AsyncRead + Unpin>(mut read: T) -> Result<()> {
+    loop {
+        let mut buf = [0u8; 2];
+        read.read_exact(&mut buf).await?;
+        println!("{:#X?}", buf);
+        let opcode = buf[0] & 0b0000_1111;
+        let length = buf[1] & 0b0111_1111;
+        println!("opcode {:#x}", opcode);
+        println!("length {:#x} {}", length, length);
+        match opcode {
+            0x0 => println!("continuation frame opcode"),
+            0x1 => println!("text opcode"),
+            0x2 => println!("binary opcode"),
+            0x9 => println!("ping opcode"),
+            0xA => println!("pong opcode"),
+            _ => {
+                println!("unexpected opcode {}", opcode);
+                break;
+            },
+        };
+        let (mask, mut bytes) = match length {
+            0..=125 => {
+                let mask_buf = read_mask(&mut read).await?;
+                let mut buf = vec![0; length as usize];
+                read.read_exact(&mut buf).await?;
+                (mask_buf, buf)
+            }
+            126 => {
+                let length = read_length(Length::U16, &mut read).await?;
+                let mask_buf = read_mask(&mut read).await?;
+                let mut buf = vec![0; length];
+                read.read_exact(&mut buf).await?;
+                (mask_buf, buf)
+            }
+            127 => {
+                let length = read_length(Length::U64, &mut read).await?;
+                let mask_buf = read_mask(&mut read).await?;
+                let mut buf = vec![0; length];
+                read.read_exact(&mut buf).await?;
+                (mask_buf, buf)
+            }
+            _ => {
+                println!("unexpected length value {:#X}", length);
+                break;
+            },
+        };
+
+        // unmasking the message
+        for i in 0..bytes.len() {
+            bytes[i] = bytes[i] ^ mask[i % 4];
+        }
+
+        println!("buffer {:#x?}", bytes);
+        match String::from_utf8(bytes) {
+            Ok(msg) => println!("got message: {}", msg),
+            Err(e) => println!("error parsing a string: {}", e),
+        }
+    }
+    Ok(())
+}
+
+async fn handle_upgraded_connection(upgraded: Upgraded) -> Result<()> {
+    let (read, write) = tokio::io::split(upgraded);
+
+    let write_future = write_messages(write);
+    let read_future = read_messages(read);
+
+    try_join(write_future, read_future).await?;
+
     Ok(())
 }
 
