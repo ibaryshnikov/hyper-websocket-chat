@@ -20,7 +20,7 @@ pub fn generate_key_from(input: &[u8]) -> String {
   base64::encode(&hash)
 }
 
-pub fn get_length_bytes(length: usize) -> Vec<u8> {
+pub fn encode_length(length: usize) -> Vec<u8> {
   if length <= 125 {
     // the first byte is the length
     vec![length as u8]
