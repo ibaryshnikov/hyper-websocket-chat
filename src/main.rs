@@ -1,13 +1,12 @@
 use std::convert::Infallible;
 
-use futures::{Stream, Sink};
 use futures::future::try_join;
-use hyper::{Body, Request, Response, Server, StatusCode};
-use hyper::service::{make_service_fn, service_fn};
+use futures::{Sink, Stream};
 use hyper::header::HeaderValue;
+use hyper::service::{make_service_fn, service_fn};
 use hyper::upgrade::Upgraded;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio_io::{AsyncRead, AsyncWrite};
+use hyper::{Body, Request, Response, Server, StatusCode};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::unbounded_channel;
 
 mod utils;
@@ -22,14 +21,14 @@ fn header_value(source: &'static str) -> HeaderValue {
 
 fn apply_cors(response: &mut Response<Body>) {
     response
-      .headers_mut()
-      .insert("AccessControlAllowOrigin", header_value("*"));
+        .headers_mut()
+        .insert("AccessControlAllowOrigin", header_value("*"));
 }
 
 fn apply_content_type(response: &mut Response<Body>) {
     response
-      .headers_mut()
-      .insert("Content-Type", header_value("text/plain; charset=utf-8"));
+        .headers_mut()
+        .insert("Content-Type", header_value("text/plain; charset=utf-8"));
 }
 
 fn hello() -> Response<Body> {
@@ -57,7 +56,10 @@ async fn send_text<T: AsyncWrite + Unpin>(upgraded: &mut T, msg: &[u8]) -> Resul
     send_single_frame_text(upgraded, msg).await
 }
 
-async fn write_messages<T: AsyncWrite + Unpin, S: Stream<Item = Vec<u8>>>(mut writer: T, stream: S) -> Result<()> {
+async fn write_messages<T: AsyncWrite + Unpin, S: Stream<Item = Vec<u8>>>(
+    mut writer: T,
+    stream: S,
+) -> Result<()> {
     send_text(&mut writer, b"Hello from hyper!").await?;
     send_text(&mut writer, "Hello".repeat(100).as_bytes()).await?;
     send_text(&mut writer, "Hello".repeat(20000).as_bytes()).await?;
@@ -92,7 +94,10 @@ async fn read_mask<T: AsyncRead + Unpin>(reader: &mut T) -> Result<[u8; 4]> {
     Ok(mask_buf)
 }
 
-async fn read_messages<T: AsyncRead + Unpin, S: Sink<Vec<u8>>>(mut reader: T, sink: S) -> Result<()> {
+async fn read_messages<T: AsyncRead + Unpin, S: Sink<Vec<u8>>>(
+    mut reader: T,
+    sink: S,
+) -> Result<()> {
     loop {
         let mut buf = [0u8; 2];
         reader.read_exact(&mut buf).await?;
@@ -108,13 +113,13 @@ async fn read_messages<T: AsyncRead + Unpin, S: Sink<Vec<u8>>>(mut reader: T, si
             0x8 => {
                 println!("close opcode");
                 return Ok(());
-            },
+            }
             0x9 => println!("ping opcode"),
             0xA => println!("pong opcode"),
             _ => {
                 println!("unexpected opcode {}", opcode);
                 break;
-            },
+            }
         };
         let (mask, mut bytes) = match length {
             0..=125 => {
@@ -141,7 +146,7 @@ async fn read_messages<T: AsyncRead + Unpin, S: Sink<Vec<u8>>>(mut reader: T, si
             _ => {
                 println!("unexpected length value {:#X}", length);
                 break;
-            },
+            }
         };
 
         // unmasking the message
@@ -172,10 +177,7 @@ async fn handle_upgraded_connection(upgraded: Upgraded) -> Result<()> {
 
 fn handle_ws(req: Request<Body>) -> Response<Body> {
     println!("ws incoming connection");
-    let sec_key = req
-      .headers()
-      .get("sec-websocket-key")
-      .unwrap();
+    let sec_key = req.headers().get("sec-websocket-key").unwrap();
 
     let sec_accept = generate_key_from(sec_key.as_bytes());
 
@@ -192,13 +194,13 @@ fn handle_ws(req: Request<Body>) -> Response<Body> {
     });
 
     Response::builder()
-      .status(StatusCode::SWITCHING_PROTOCOLS)
-      .header("access-control-allow-origin", "*")
-      .header("upgrade", "websocket")
-      .header("connection", "upgrade")
-      .header("sec-websocket-accept", sec_accept)
-      .body(Body::empty())
-      .unwrap()
+        .status(StatusCode::SWITCHING_PROTOCOLS)
+        .header("access-control-allow-origin", "*")
+        .header("upgrade", "websocket")
+        .header("connection", "upgrade")
+        .header("sec-websocket-accept", sec_accept)
+        .body(Body::empty())
+        .unwrap()
 }
 
 fn not_found() -> Response<Body> {
@@ -220,17 +222,13 @@ async fn request_router(req: Request<Body>) -> StdResult<Response<Body>, Infalli
 }
 
 #[tokio::main]
-async fn main() -> Result<()>{
+async fn main() -> Result<()> {
     let addr = ([127, 0, 0, 1], 8000).into();
 
-    let new_svc = make_service_fn(|_addr| {
-        async {
-            Ok::<_, Infallible>(service_fn(request_router))
-        }
-    });
+    let new_svc =
+        make_service_fn(|_addr| async { Ok::<_, Infallible>(service_fn(request_router)) });
 
-    let server = Server::bind(&addr)
-      .serve(new_svc);
+    let server = Server::bind(&addr).serve(new_svc);
 
     println!("Listening at http://127.0.0.1:8000");
 
