@@ -1,5 +1,4 @@
-use crypto::digest::Digest;
-use crypto::sha1::Sha1;
+use sha1::{Digest, Sha1};
 
 pub mod consts;
 mod read;
@@ -44,9 +43,7 @@ const WS_MAGIC_CONST: &[u8] = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 fn sha1(msg: &[u8]) -> [u8; 20] {
     let mut hasher = Sha1::new();
     hasher.input(&msg);
-    let mut buffer = [0; 20];
-    hasher.result(&mut buffer);
-    buffer
+    hasher.result().into()
 }
 
 pub fn generate_key_from(input: &[u8]) -> String {
