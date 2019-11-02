@@ -1,0 +1,15 @@
+#input, #output {
+    margin: 0 auto;
+    display: block;
+    background: black;
+    color: white;
+    /*font-size: 18px;*/
+}
+#input {
+    width: 594px;
+    padding: 4px;
+}
+#output {
+    width: 600px;
+    height: 300px;
+}
