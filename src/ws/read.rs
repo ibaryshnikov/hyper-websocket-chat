@@ -1,16 +1,20 @@
 use tokio::io::{AsyncRead, AsyncReadExt};
 
-use super::Length;
+use super::frame::PayloadLength;
 use crate::shared::types::Result;
 
-pub async fn read_length<T: AsyncRead + Unpin>(kind: Length, reader: &mut T) -> Result<usize> {
+pub async fn read_length<T: AsyncRead + Unpin>(
+    kind: PayloadLength,
+    reader: &mut T,
+) -> Result<usize> {
+    use PayloadLength::*;
     let length = match kind {
-        Length::U16 => {
+        U16 => {
             let mut buf = [0u8; 2];
             reader.read_exact(&mut buf).await?;
             u16::from_be_bytes(buf) as usize
         }
-        Length::U64 => {
+        U64 => {
             let mut buf = [0u8; 8];
             reader.read_exact(&mut buf).await?;
             u64::from_be_bytes(buf) as usize

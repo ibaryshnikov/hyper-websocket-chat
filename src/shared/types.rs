@@ -7,7 +7,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::Mutex;
 use tokio_io::split::WriteHalf;
 
-use crate::endpoints::Frame;
+use crate::ws::frame::Frame;
 
 pub type StdResult<T, E> = result::Result<T, E>;
 pub type Result<T> = StdResult<T, Box<dyn error::Error + Send + Sync>>;

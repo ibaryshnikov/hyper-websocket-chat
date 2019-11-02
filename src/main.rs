@@ -11,9 +11,10 @@ use tokio::sync::Mutex;
 
 mod endpoints;
 mod shared;
+mod ws;
 
-use crate::endpoints::*;
-use crate::shared::types::*;
+use endpoints::*;
+use shared::types::*;
 
 async fn request_router(
     req: Request<Body>,
@@ -34,7 +35,7 @@ async fn main() -> Result<()> {
     let addr = "127.0.0.1:8081".parse()?;
 
     let clients = Arc::new(Mutex::new(HashMap::new()));
-    let (sender, receiver) = unbounded_channel::<Frame>();
+    let (sender, receiver) = unbounded_channel();
 
     let write_future = write_messages(receiver, clients.clone());
 
@@ -47,7 +48,7 @@ async fn main() -> Result<()> {
             }))
         }
     });
-    let server_future = Server::bind(&addr).serve(service).map_err(|e| e.into());
+    let server_future = Server::bind(&addr).serve(service).map_err(Into::into);
 
     println!("Listening at http://{}", addr);
 

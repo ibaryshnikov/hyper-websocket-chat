@@ -4,9 +4,11 @@ use hyper::{Body, Request, Response, StatusCode};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use uuid::Uuid;
 
-use super::ws_consts::*;
-use super::ws_utils::*;
 use crate::shared::types::*;
+use crate::ws::consts::*;
+use crate::ws::frame::*;
+use crate::ws::handshake::generate_key_from;
+use crate::ws::*;
 use crate::ClientsArc;
 
 pub async fn write_messages(mut stream: Receiver, clients: ClientsArc) -> Result<()> {
@@ -65,14 +67,14 @@ where
                 (mask_buf, buf)
             }
             126 => {
-                let length = read_length(Length::U16, &mut reader).await?;
+                let length = read_length(PayloadLength::U16, &mut reader).await?;
                 let mask_buf = read_mask(&mut reader).await?;
                 let mut buf = vec![0; length];
                 reader.read_exact(&mut buf).await?;
                 (mask_buf, buf)
             }
             127 => {
-                let length = read_length(Length::U64, &mut reader).await?;
+                let length = read_length(PayloadLength::U64, &mut reader).await?;
                 let mask_buf = read_mask(&mut reader).await?;
                 let mut buf = vec![0; length];
                 reader.read_exact(&mut buf).await?;
