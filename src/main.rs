@@ -1,12 +1,13 @@
 use std::convert::Infallible;
 
-use futures::future::try_join;
-use futures::{Sink, Stream};
+use futures::future::try_join3;
+use futures::{Sink, SinkExt, Stream, StreamExt};
 use hyper::header::HeaderValue;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::upgrade::Upgraded;
 use hyper::{Body, Request, Response, Server, StatusCode};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::prelude::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc::unbounded_channel;
 
 mod utils;
@@ -56,14 +57,49 @@ async fn send_text<T: AsyncWrite + Unpin>(upgraded: &mut T, msg: &[u8]) -> Resul
     send_single_frame_text(upgraded, msg).await
 }
 
-async fn write_messages<T: AsyncWrite + Unpin, S: Stream<Item = Vec<u8>>>(
-    mut writer: T,
-    stream: S,
-) -> Result<()> {
-    send_text(&mut writer, b"Hello from hyper!").await?;
-    send_text(&mut writer, "Hello".repeat(100).as_bytes()).await?;
-    send_text(&mut writer, "Hello".repeat(20000).as_bytes()).await?;
-    send_close_frame(&mut writer).await?;
+async fn send_single_frame_binary<T: AsyncWrite + Unpin>(writer: &mut T, msg: &[u8]) -> Result<()> {
+    let first_byte: &[u8] = &[0x82];
+    let length = encode_length(msg.len());
+    let payload = [first_byte, &length, msg].concat();
+    writer.write_all(&payload).await?;
+    Ok(())
+}
+
+async fn send_binary<T: AsyncWrite + Unpin>(upgraded: &mut T, msg: &[u8]) -> Result<()> {
+    send_single_frame_binary(upgraded, msg).await
+}
+
+#[derive(Debug)]
+enum FrameKind {
+    Text,
+    Binary,
+    Close,
+}
+
+struct Frame {
+    kind: FrameKind,
+    data: Vec<u8>,
+}
+
+async fn write_messages<T, S>(mut writer: T, mut stream: S) -> Result<()>
+where
+    T: AsyncWrite + Unpin,
+    S: Stream<Item = Frame> + Unpin,
+{
+    while let Some(frame) = stream.next().await {
+        println!("got frame {:?}", frame.kind);
+        match frame.kind {
+            FrameKind::Text => send_text(&mut writer, &frame.data).await?,
+            FrameKind::Binary => send_binary(&mut writer, &frame.data).await?,
+            FrameKind::Close => {
+                send_close_frame(&mut writer).await?;
+                break;
+            }
+        }
+    }
+
+    println!("stopping writing messages");
+
     Ok(())
 }
 
@@ -94,10 +130,12 @@ async fn read_mask<T: AsyncRead + Unpin>(reader: &mut T) -> Result<[u8; 4]> {
     Ok(mask_buf)
 }
 
-async fn read_messages<T: AsyncRead + Unpin, S: Sink<Vec<u8>>>(
-    mut reader: T,
-    sink: S,
-) -> Result<()> {
+async fn read_messages<T, S>(mut reader: T, mut sink: S) -> Result<()>
+where
+    T: AsyncRead + Unpin,
+    S: Sink<Frame> + Unpin + Clone,
+    <S as Sink<Frame>>::Error: std::error::Error + Send + Sync + 'static,
+{
     loop {
         let mut buf = [0u8; 2];
         reader.read_exact(&mut buf).await?;
@@ -151,26 +189,66 @@ async fn read_messages<T: AsyncRead + Unpin, S: Sink<Vec<u8>>>(
 
         // unmasking the message
         for i in 0..bytes.len() {
-            bytes[i] = bytes[i] ^ mask[i % 4];
+            bytes[i] ^= mask[i % 4];
         }
 
         println!("buffer {:#x?}", bytes);
         match String::from_utf8(bytes) {
-            Ok(msg) => println!("got message: {}", msg),
+            Ok(msg) => {
+                println!("got message: {}", msg);
+                sink.send(Frame {
+                    kind: FrameKind::Text,
+                    data: msg.into_bytes(),
+                })
+                .await?;
+            }
             Err(e) => println!("error parsing a string: {}", e),
         }
     }
     Ok(())
 }
 
+async fn send_messages<T>(mut sender: T) -> Result<()>
+where
+    T: Sink<Frame> + Unpin,
+    <T as Sink<Frame>>::Error: std::error::Error + Send + Sync + 'static,
+{
+    sender
+        .send(Frame {
+            kind: FrameKind::Text,
+            data: b"Hello from hyper!".to_vec(),
+        })
+        .await?;
+    sender
+        .send(Frame {
+            kind: FrameKind::Text,
+            data: "Hello".repeat(100).into_bytes(),
+        })
+        .await?;
+    sender
+        .send(Frame {
+            kind: FrameKind::Text,
+            data: "Hello".repeat(20000).into_bytes(),
+        })
+        .await?;
+    sender
+        .send(Frame {
+            kind: FrameKind::Binary,
+            data: vec![1, 2, 3],
+        })
+        .await?;
+    Ok(())
+}
+
 async fn handle_upgraded_connection(upgraded: Upgraded) -> Result<()> {
     let (reader, writer) = tokio::io::split(upgraded);
 
-    let (sender, receiver) = unbounded_channel::<Vec<u8>>();
+    let (sender, receiver) = unbounded_channel::<Frame>();
     let write_future = write_messages(writer, receiver);
-    let read_future = read_messages(reader, sender);
+    let read_future = read_messages(reader, sender.clone());
+    let send_future = send_messages(sender);
 
-    try_join(write_future, read_future).await?;
+    try_join3(write_future, read_future, send_future).await?;
 
     Ok(())
 }
