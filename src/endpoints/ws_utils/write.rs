@@ -7,7 +7,7 @@ use crate::ClientsMap;
 
 use super::consts::*;
 
-pub fn encode_close_frame() -> Vec<u8>{
+pub fn encode_close_frame() -> Vec<u8> {
     [OPCODE_CLOSE | FIN_BIT_MASK].to_vec()
 }
 //pub async fn send_close_frame<T: AsyncWrite + Unpin>(writer: &mut T) -> Result<()> {
@@ -53,7 +53,11 @@ pub fn encode_binary(msg: &[u8]) -> Vec<u8> {
 //    send_single_frame_binary(upgraded, msg).await
 //}
 
-pub async fn broadcast_buffer(clients: &mut ClientsMap, address: FrameAddress, buffer: &[u8]) -> Result<()> {
+pub async fn broadcast_buffer(
+    clients: &mut ClientsMap,
+    address: FrameAddress,
+    buffer: &[u8],
+) -> Result<()> {
     match address {
         FrameAddress::All => {
             for writer in clients.values_mut() {

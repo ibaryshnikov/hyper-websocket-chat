@@ -1,11 +1,10 @@
 use std::collections::HashMap;
 use std::convert::Infallible;
-use std::net::SocketAddr;
 use std::sync::Arc;
 
 use hyper::service::{make_service_fn, service_fn};
-use hyper::{Body, Request, Response, Server};
 use hyper::upgrade::Upgraded;
+use hyper::{Body, Request, Response, Server};
 use tokio::sync::Mutex;
 use tokio_io::split::WriteHalf;
 
@@ -36,7 +35,7 @@ async fn request_router(
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let addr: SocketAddr = "127.0.0.1:8081".parse()?;
+    let addr = "127.0.0.1:8081".parse()?;
 
     let clients = Arc::new(Mutex::new(HashMap::new()));
     let new_svc = make_service_fn(move |_addr| {
@@ -46,7 +45,7 @@ async fn main() -> Result<()> {
 
     println!("Listening at http://{}", addr);
 
-    Server::bind(&addr.into()).serve(new_svc).await?;
+    Server::bind(&addr).serve(new_svc).await?;
 
     Ok(())
 }

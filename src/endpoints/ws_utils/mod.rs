@@ -1,9 +1,9 @@
 use crypto::digest::Digest;
 use crypto::sha1::Sha1;
 
+pub mod consts;
 mod read;
 mod write;
-pub mod consts;
 
 pub use read::*;
 pub use write::*;

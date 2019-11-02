@@ -6,8 +6,8 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::sync::mpsc::unbounded_channel;
 use uuid::Uuid;
 
-use super::ws_utils::*;
 use super::ws_consts::*;
+use super::ws_utils::*;
 use crate::shared_types::*;
 use crate::ClientsArc;
 
@@ -31,11 +31,7 @@ where
     Ok(())
 }
 
-async fn read_messages<T, S>(
-    mut reader: T,
-    mut sink: S,
-    id: u128,
-) -> Result<()>
+async fn read_messages<T, S>(mut reader: T, mut sink: S, id: u128) -> Result<()>
 where
     T: AsyncRead + Unpin,
     S: Sink<Frame> + Unpin + Clone,
@@ -104,6 +100,7 @@ where
             Ok(msg) => {
                 println!("got message: {}", msg);
                 let bytes = id.to_be_bytes();
+                #[rustfmt::skip]
                 let short_id = u32::from_be_bytes([
                     bytes[0],
                     bytes[1],
@@ -145,10 +142,7 @@ async fn handle_upgraded_connection(upgraded: Upgraded, clients: ClientsArc) -> 
     let (sender, receiver) = unbounded_channel::<Frame>();
 
     let id = Uuid::new_v4().to_u128_le();
-    clients
-        .lock()
-        .await
-        .insert(id, writer);
+    clients.lock().await.insert(id, writer);
 
     let write_future = write_messages(receiver, clients);
     let read_future = read_messages(reader, sender, id);
