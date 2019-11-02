@@ -2,50 +2,56 @@ use std::collections::HashMap;
 use std::convert::Infallible;
 use std::sync::Arc;
 
+use futures::future::try_join;
+use futures::TryFutureExt;
 use hyper::service::{make_service_fn, service_fn};
-use hyper::upgrade::Upgraded;
 use hyper::{Body, Request, Response, Server};
+use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::Mutex;
-use tokio_io::split::WriteHalf;
 
 mod endpoints;
-mod shared_types;
-mod utils;
+mod shared;
 
 use crate::endpoints::*;
-use crate::shared_types::*;
-
-pub type ClientsMap = HashMap<u128, WriteHalf<Upgraded>>;
-pub type ClientsArc = Arc<Mutex<ClientsMap>>;
+use crate::shared::types::*;
 
 async fn request_router(
     req: Request<Body>,
+    sender: Sender,
     clients: ClientsArc,
 ) -> StdResult<Response<Body>, Infallible> {
     println!("req uri in endpoint {}", req.uri());
     let response = match &req.uri().to_string()[..] {
         "/" => hello(),
-        "/ws" => handle_ws(req, clients),
+        "/ws" => handle_ws(req, sender, clients),
         _ => not_found(),
     };
     Ok(response)
 }
-
-//fn service_fn_wrapper(clients: ClientsMap) ->
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let addr = "127.0.0.1:8081".parse()?;
 
     let clients = Arc::new(Mutex::new(HashMap::new()));
-    let new_svc = make_service_fn(move |_addr| {
+    let (sender, receiver) = unbounded_channel::<Frame>();
+
+    let write_future = write_messages(receiver, clients.clone());
+
+    let service = make_service_fn(move |_addr| {
         let clients = clients.clone();
-        async move { Ok::<_, Infallible>(service_fn(move |req| request_router(req, clients.clone()))) }
+        let sender = sender.clone();
+        async move {
+            Ok::<_, Infallible>(service_fn(move |req| {
+                request_router(req, sender.clone(), clients.clone())
+            }))
+        }
     });
+    let server_future = Server::bind(&addr).serve(service).map_err(|e| e.into());
 
     println!("Listening at http://{}", addr);
 
-    Server::bind(&addr).serve(new_svc).await?;
+    try_join(write_future, server_future).await?;
 
     Ok(())
 }

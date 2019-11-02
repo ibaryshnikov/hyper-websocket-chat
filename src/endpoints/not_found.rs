@@ -1,6 +1,6 @@
 use hyper::{Body, Response, StatusCode};
 
-use crate::utils::*;
+use crate::shared::utils::*;
 
 pub fn not_found() -> Response<Body> {
     let mut response = Response::new(Body::from("Not found"));

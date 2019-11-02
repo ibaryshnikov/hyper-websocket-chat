@@ -1,7 +1,7 @@
 use tokio::io::{AsyncRead, AsyncReadExt};
 
 use super::Length;
-use crate::shared_types::Result;
+use crate::shared::types::Result;
 
 pub async fn read_length<T: AsyncRead + Unpin>(kind: Length, reader: &mut T) -> Result<usize> {
     let length = match kind {

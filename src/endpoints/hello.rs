@@ -1,6 +1,6 @@
 use hyper::{Body, Response};
 
-use crate::utils::*;
+use crate::shared::utils::*;
 
 pub fn hello() -> Response<Body> {
     let mut response = Response::new(Body::from("Hello from hyper!"));

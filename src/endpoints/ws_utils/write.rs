@@ -2,7 +2,7 @@ use tokio::io::AsyncWriteExt;
 //use tokio::io::AsyncWrite;
 
 use super::{encode_length, FrameAddress};
-use crate::shared_types::Result;
+use crate::shared::types::Result;
 use crate::ClientsMap;
 
 use super::consts::*;

@@ -1,20 +1,15 @@
-use futures::future::try_join;
-use futures::{Sink, SinkExt, Stream, StreamExt};
+use futures::{SinkExt, StreamExt};
 use hyper::upgrade::Upgraded;
 use hyper::{Body, Request, Response, StatusCode};
 use tokio::io::{AsyncRead, AsyncReadExt};
-use tokio::sync::mpsc::unbounded_channel;
 use uuid::Uuid;
 
 use super::ws_consts::*;
 use super::ws_utils::*;
-use crate::shared_types::*;
+use crate::shared::types::*;
 use crate::ClientsArc;
 
-async fn write_messages<T>(mut stream: T, clients: ClientsArc) -> Result<()>
-where
-    T: Stream<Item = Frame> + Unpin,
-{
+pub async fn write_messages(mut stream: Receiver, clients: ClientsArc) -> Result<()> {
     while let Some(frame) = stream.next().await {
         let buffer = match frame.kind {
             FrameKind::Text => encode_text(&frame.data),
@@ -31,11 +26,9 @@ where
     Ok(())
 }
 
-async fn read_messages<T, S>(mut reader: T, mut sink: S, id: u128) -> Result<()>
+async fn read_messages<T>(mut reader: T, mut sink: Sender, id: u128) -> Result<()>
 where
     T: AsyncRead + Unpin,
-    S: Sink<Frame> + Unpin + Clone,
-    <S as Sink<Frame>>::Error: std::error::Error + Send + Sync + 'static,
 {
     send_messages(&mut sink, id).await?;
     loop {
@@ -121,11 +114,7 @@ where
     Ok(())
 }
 
-async fn send_messages<T>(sender: &mut T, id: u128) -> Result<()>
-where
-    T: Sink<Frame> + Unpin,
-    <T as Sink<Frame>>::Error: std::error::Error + Send + Sync + 'static,
-{
+async fn send_messages(sender: &mut Sender, id: u128) -> Result<()> {
     sender
         .send(Frame {
             kind: FrameKind::Text,
@@ -136,23 +125,22 @@ where
     Ok(())
 }
 
-async fn handle_upgraded_connection(upgraded: Upgraded, clients: ClientsArc) -> Result<()> {
+async fn handle_upgraded_connection(
+    upgraded: Upgraded,
+    sender: Sender,
+    clients: ClientsArc,
+) -> Result<()> {
     let (reader, writer) = tokio::io::split(upgraded);
-
-    let (sender, receiver) = unbounded_channel::<Frame>();
 
     let id = Uuid::new_v4().to_u128_le();
     clients.lock().await.insert(id, writer);
 
-    let write_future = write_messages(receiver, clients);
-    let read_future = read_messages(reader, sender, id);
-
-    try_join(write_future, read_future).await?;
+    read_messages(reader, sender, id).await?;
 
     Ok(())
 }
 
-pub fn handle_ws(req: Request<Body>, clients: ClientsArc) -> Response<Body> {
+pub fn handle_ws(req: Request<Body>, sender: Sender, clients: ClientsArc) -> Response<Body> {
     println!("ws incoming connection");
     let sec_key = req.headers().get("sec-websocket-key").unwrap();
 
@@ -162,7 +150,7 @@ pub fn handle_ws(req: Request<Body>, clients: ClientsArc) -> Response<Body> {
         match req.into_body().on_upgrade().await {
             Ok(upgraded) => {
                 println!("upgraded");
-                if let Err(e) = handle_upgraded_connection(upgraded, clients).await {
+                if let Err(e) = handle_upgraded_connection(upgraded, sender, clients).await {
                     println!("error handling upgraded connection: {}", e);
                 }
             }
