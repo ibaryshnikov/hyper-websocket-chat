@@ -1,77 +1,50 @@
-use tokio::io::AsyncWriteExt;
-//use tokio::io::AsyncWrite;
+use anyhow::Result;
+use futures::StreamExt;
+use tokio::io::{AsyncWrite, AsyncWriteExt};
 
 use super::encoding::encode_length;
-use super::frame::FrameAddress;
-use crate::shared::types::{ClientsMap, Result};
+use super::event::EventAddress;
+use crate::shared::types::*;
 
 use super::consts::*;
+use super::event::*;
+use super::opcode::Opcode;
 
 pub fn encode_close_frame() -> Vec<u8> {
-    [OPCODE_CLOSE | FIN_BIT_MASK].to_vec()
+    [Opcode::Close.encode() | FIN_MASK].to_vec()
 }
-//pub async fn send_close_frame<T: AsyncWrite + Unpin>(writer: &mut T) -> Result<()> {
-//    let msg = [OPCODE_CLOSE | FIN_BIT_MASK];
-//    writer.write_all(&msg).await?;
-//    Ok(())
-//}
-
-//async fn send_single_frame_text<T: AsyncWrite + Unpin>(writer: &mut T, msg: &[u8]) -> Result<()> {
-//    let first_byte: &[u8] = &[OPCODE_TEXT | FIN_BIT_MASK];
-//    let length = encode_length(msg.len());
-//    let payload = [first_byte, &length, msg].concat();
-//    writer.write_all(&payload).await?;
-//    Ok(())
-//}
 
 pub fn encode_text(msg: &[u8]) -> Vec<u8> {
-    let first_byte: &[u8] = &[OPCODE_TEXT | FIN_BIT_MASK];
+    let first_byte: &[u8] = &[Opcode::Text.encode() | FIN_MASK];
     let length = encode_length(msg.len());
     [first_byte, &length, msg].concat()
 }
-//pub async fn send_text<T: AsyncWrite + Unpin>(upgraded: &mut T, msg: &[u8]) -> Result<()> {
-//    send_single_frame_text(upgraded, msg).await
-//}
-
-//pub async fn send_single_frame_binary<T: AsyncWrite + Unpin>(
-//    writer: &mut T,
-//    msg: &[u8],
-//) -> Result<()> {
-//    let first_byte: &[u8] = &[OPCODE_BINARY | FIN_BIT_MASK];
-//    let length = encode_length(msg.len());
-//    let payload = [first_byte, &length, msg].concat();
-//    writer.write_all(&payload).await?;
-//    Ok(())
-//}
 
 pub fn encode_binary(msg: &[u8]) -> Vec<u8> {
-    let first_byte: &[u8] = &[OPCODE_BINARY | FIN_BIT_MASK];
+    let first_byte: &[u8] = &[Opcode::Binary.encode() | FIN_MASK];
     let length = encode_length(msg.len());
     [first_byte, &length, msg].concat()
 }
-//pub async fn send_binary<T: AsyncWrite + Unpin>(upgraded: &mut T, msg: &[u8]) -> Result<()> {
-//    send_single_frame_binary(upgraded, msg).await
-//}
 
 pub async fn broadcast_buffer(
     clients: &mut ClientsMap,
-    address: FrameAddress,
+    address: EventAddress,
     buffer: &[u8],
 ) -> Result<()> {
     match address {
-        FrameAddress::All => {
+        EventAddress::All => {
             for writer in clients.values_mut() {
                 writer.write_all(buffer).await?;
             }
         }
-        FrameAddress::Client(id) => {
+        EventAddress::Client(id) => {
             if let Some(writer) = clients.get_mut(&id) {
                 writer.write_all(buffer).await?;
             } else {
                 println!("Can't send message, client {} not found", id);
             }
         }
-        FrameAddress::ClientRange(list) => {
+        EventAddress::ClientRange(list) => {
             for id in list {
                 if let Some(writer) = clients.get_mut(&id) {
                     writer.write_all(buffer).await?;
@@ -81,5 +54,41 @@ pub async fn broadcast_buffer(
             }
         }
     }
+    Ok(())
+}
+
+pub async fn broadcast(mut stream: Receiver, clients: ClientsArc) -> Result<()> {
+    while let Some(event) = stream.next().await {
+        let buffer = match event.kind {
+            EventKind::Text => encode_text(&event.payload),
+            EventKind::Binary => encode_binary(&event.payload),
+            EventKind::Close => encode_close_frame(),
+        };
+        let mut clients = clients.lock().await;
+        println!("broadcasting {:?} to {:?}", event.kind, event.address);
+        if let EventAddress::All = event.address {
+            println!("clients connected: {}", clients.len());
+        }
+        broadcast_buffer(&mut *clients, event.address, &buffer).await?;
+    }
+
+    println!("Stopping writing messages");
+
+    Ok(())
+}
+
+pub async fn send_directly<T: AsyncWrite + Unpin>(
+    writer: &mut T,
+    id: u128,
+    kind: EventKind,
+    data: &[u8],
+) -> Result<()> {
+    let buffer = match kind {
+        EventKind::Text => encode_text(data),
+        EventKind::Binary => encode_binary(data),
+        EventKind::Close => encode_close_frame(),
+    };
+    println!("sending direct message {:?} to {}", kind, id);
+    writer.write_all(&buffer).await?;
     Ok(())
 }

@@ -2,6 +2,11 @@ use std::collections::HashMap;
 use std::convert::Infallible;
 use std::sync::Arc;
 
+#[macro_use]
+extern crate anyhow;
+
+use anyhow::Result;
+
 use futures::future::try_join;
 use futures::TryFutureExt;
 use hyper::service::{make_service_fn, service_fn};
@@ -15,12 +20,13 @@ mod ws;
 
 use endpoints::*;
 use shared::types::*;
+use ws::broadcast;
 
 async fn request_router(
     req: Request<Body>,
     sender: Sender,
     clients: ClientsArc,
-) -> StdResult<Response<Body>, Infallible> {
+) -> Result<Response<Body>, Infallible> {
     println!("req uri in endpoint {}", req.uri());
     let response = match &req.uri().to_string()[..] {
         "/" => hello(),
@@ -37,7 +43,7 @@ async fn main() -> Result<()> {
     let clients = Arc::new(Mutex::new(HashMap::new()));
     let (sender, receiver) = unbounded_channel();
 
-    let write_future = write_messages(receiver, clients.clone());
+    let write_future = broadcast(receiver, clients.clone());
 
     let service = make_service_fn(move |_addr| {
         let clients = clients.clone();

@@ -1,4 +1,5 @@
-use futures::{SinkExt, StreamExt};
+use anyhow::Result;
+use futures::SinkExt;
 use hyper::upgrade::Upgraded;
 use hyper::{Body, Request, Response, StatusCode};
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -6,138 +7,119 @@ use uuid::Uuid;
 
 use crate::shared::types::*;
 use crate::ws::consts::*;
+use crate::ws::event::*;
 use crate::ws::frame::*;
 use crate::ws::handshake::generate_key_from;
+use crate::ws::opcode::Opcode;
 use crate::ws::*;
 use crate::ClientsArc;
 
-pub async fn write_messages(mut stream: Receiver, clients: ClientsArc) -> Result<()> {
-    while let Some(frame) = stream.next().await {
-        let buffer = match frame.kind {
-            FrameKind::Text => encode_text(&frame.data),
-            FrameKind::Binary => encode_binary(&frame.data),
-            FrameKind::Close => encode_close_frame(),
-        };
-        let mut clients = clients.lock().await;
-        println!("broadcasting {:?} to {:?}", frame.kind, frame.address);
-        broadcast_buffer(&mut *clients, frame.address, &buffer).await?;
+async fn read_frame<T: AsyncRead + Unpin>(reader: &mut T) -> Result<Frame> {
+    let mut buf = [0u8; 2];
+    reader.read_exact(&mut buf).await?;
+    let headers = Headers::decode(buf[0]);
+    let opcode = Opcode::decode(buf[0]);
+
+    let length = match buf[1] & LENGTH_MASK {
+        value @ 0..=125 => value as usize,
+        126 => read_length_u16(reader).await?,
+        127 => read_length_u64(reader).await?,
+        // as length is 7 bit, this should never panic
+        value => panic!("Unexpected length value {:#X}", value),
+    };
+    let maybe_mask = if headers.mask {
+        Some(read_mask(reader).await?)
+    } else {
+        None
+    };
+
+    // reading payload data
+    let mut payload = vec![0; length];
+    reader.read_exact(&mut payload).await?;
+
+    if let Some(mask) = maybe_mask {
+        // unmasking the message
+        for i in 0..payload.len() {
+            payload[i] ^= mask[i % 4];
+        }
     }
 
-    println!("Stopping writing messages");
-
-    Ok(())
+    Ok(Frame {
+        headers,
+        opcode,
+        payload,
+    })
 }
 
-async fn read_messages<T>(mut reader: T, mut sink: Sender, id: u128) -> Result<()>
-where
-    T: AsyncRead + Unpin,
-{
-    send_messages(&mut sink, id).await?;
+async fn read_messages<T: AsyncRead + Unpin>(
+    mut reader: T,
+    mut sender: Sender,
+    clients: ClientsArc,
+    id: u128,
+    short_id: String,
+) -> Result<()> {
     loop {
-        let mut buf = [0u8; 2];
-        reader.read_exact(&mut buf).await?;
-        let fin_bit = (buf[0] & FIN_BIT_MASK) >> 7;
-        println!("fin bit is {}", fin_bit);
-        let opcode = buf[0] & OPCODE_MASK;
-        let length = buf[1] & LENGTH_MASK;
-        let masked = (buf[1] & MASKED_MASK) >> 7;
-        println!("opcode {:#x}", opcode);
-        println!("length {:#x} {}", length, length);
-        println!("is masked: {}", masked);
-        match opcode {
-            OPCODE_CONTINUATION => println!("continuation frame opcode"),
-            OPCODE_TEXT => println!("text opcode"),
-            OPCODE_BINARY => println!("binary opcode"),
-            OPCODE_CLOSE => {
-                println!("close opcode");
+        let frame = read_frame(&mut reader).await?;
+        match frame.opcode {
+            Opcode::Text => match String::from_utf8(frame.payload) {
+                Ok(msg) => {
+                    println!("got message: {}", msg);
+                    let reply = format!("{}: {}", short_id, msg);
+                    sender.send(text_event(reply, EventAddress::All)).await?;
+                }
+                Err(e) => println!("error parsing a string: {}", e),
+            },
+            Opcode::Close => {
+                println!("Got CLOSE opcode, closing connection");
+                if let Some(writer) = clients.lock().await.get_mut(&id) {
+                    send_directly(writer, id, EventKind::Close, &frame.payload).await?;
+                    println!("CLOSE reply sent");
+                } else {
+                    return Err(anyhow!(
+                        "Can't find own connection to send CLOSE frame for {}",
+                        id
+                    ));
+                }
+
+                let msg = format!("{} leaving the server", short_id);
+                sender.send(text_event(msg, EventAddress::All)).await?;
+                println!("Users in chat notified");
                 return Ok(());
             }
-            OPCODE_PING => println!("ping opcode"),
-            OPCODE_PONG => println!("pong opcode"),
-            _ => {
-                println!("unexpected opcode {}", opcode);
-                break;
+            code => {
+                println!("Unsupported opcode: {:?}", code);
+                return Err(anyhow!("Unsupported opcode {:?}", code));
             }
-        };
-        let (mask, mut bytes) = match length {
-            0..=125 => {
-                let mask_buf = read_mask(&mut reader).await?;
-                let mut buf = vec![0; length as usize];
-                reader.read_exact(&mut buf).await?;
-                (mask_buf, buf)
-            }
-            126 => {
-                let length = read_length(PayloadLength::U16, &mut reader).await?;
-                let mask_buf = read_mask(&mut reader).await?;
-                let mut buf = vec![0; length];
-                reader.read_exact(&mut buf).await?;
-                (mask_buf, buf)
-            }
-            127 => {
-                let length = read_length(PayloadLength::U64, &mut reader).await?;
-                let mask_buf = read_mask(&mut reader).await?;
-                let mut buf = vec![0; length];
-                reader.read_exact(&mut buf).await?;
-                (mask_buf, buf)
-            }
-            _ => {
-                println!("unexpected length value {:#X}", length);
-                break;
-            }
-        };
-
-        // unmasking the message
-        for i in 0..bytes.len() {
-            bytes[i] ^= mask[i % 4];
-        }
-
-        match String::from_utf8(bytes) {
-            Ok(msg) => {
-                println!("got message: {}", msg);
-                let bytes = id.to_be_bytes();
-                #[rustfmt::skip]
-                let short_id = u32::from_be_bytes([
-                    bytes[0],
-                    bytes[1],
-                    bytes[2],
-                    bytes[3],
-                ]);
-                let new_msg = format!("client {:#x}: {}", short_id, msg).into_bytes();
-                sink.send(Frame {
-                    kind: FrameKind::Text,
-                    address: FrameAddress::All,
-                    data: new_msg,
-                })
-                .await?;
-            }
-            Err(e) => println!("error parsing a string: {}", e),
         }
     }
-    Ok(())
 }
 
-async fn send_messages(sender: &mut Sender, id: u128) -> Result<()> {
-    sender
-        .send(Frame {
-            kind: FrameKind::Text,
-            address: FrameAddress::Client(id),
-            data: b"Welcome to chat server!".to_vec(),
-        })
-        .await?;
-    Ok(())
+fn text_event(data: String, to: EventAddress) -> Event {
+    Event {
+        kind: EventKind::Text,
+        address: to,
+        payload: data.into_bytes(),
+    }
 }
 
 async fn handle_upgraded_connection(
     upgraded: Upgraded,
-    sender: Sender,
+    mut sender: Sender,
     clients: ClientsArc,
+    id: u128,
 ) -> Result<()> {
-    let (reader, writer) = tokio::io::split(upgraded);
+    let (reader, mut writer) = tokio::io::split(upgraded);
 
-    let id = Uuid::new_v4().to_u128_le();
+    send_directly(&mut writer, id, EventKind::Text, b"Welcome to chat server!").await?;
+
     clients.lock().await.insert(id, writer);
 
-    read_messages(reader, sender, id).await?;
+    let short_id = format!("{:#x}", id)[2..10].to_owned();
+
+    let msg = format!("{} joined the server", short_id);
+    sender.send(text_event(msg, EventAddress::All)).await?;
+
+    read_messages(reader, sender, clients, id, short_id).await?;
 
     Ok(())
 }
@@ -152,9 +134,15 @@ pub fn handle_ws(req: Request<Body>, sender: Sender, clients: ClientsArc) -> Res
         match req.into_body().on_upgrade().await {
             Ok(upgraded) => {
                 println!("upgraded");
-                if let Err(e) = handle_upgraded_connection(upgraded, sender, clients).await {
+                let id = Uuid::new_v4().to_u128_le();
+                if let Err(e) =
+                    handle_upgraded_connection(upgraded, sender, clients.clone(), id).await
+                {
                     println!("error handling upgraded connection: {}", e);
+                } else {
+                    println!("closing upgraded connection")
                 }
+                clients.lock().await.remove(&id);
             }
             Err(e) => println!("upgrade error: {}", e),
         }

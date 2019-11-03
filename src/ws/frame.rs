@@ -1,30 +1,29 @@
+use super::consts::*;
+use super::opcode::Opcode;
+
 #[derive(Debug)]
-pub enum FrameAddress {
-    All,
-    Client(u128),
-    ClientRange(Vec<u128>),
+pub struct Headers {
+    pub fin: bool,
+    pub rsv1: bool,
+    pub rsv2: bool,
+    pub rsv3: bool,
+    pub mask: bool,
+}
+impl Headers {
+    pub fn decode(byte: u8) -> Self {
+        Headers {
+            fin: is_fin(byte),
+            rsv1: is_rsv1(byte),
+            rsv2: is_rsv2(byte),
+            rsv3: is_rsv3(byte),
+            mask: is_mask(byte),
+        }
+    }
 }
 
 #[derive(Debug)]
-pub enum FrameKind {
-    Text,
-    Binary,
-    Close,
-}
-
-#[derive(Debug)]
-pub enum FrameSource {
-    System,
-    Client(u128),
-}
-
 pub struct Frame {
-    pub kind: FrameKind,
-    pub address: FrameAddress,
-    pub data: Vec<u8>,
-}
-
-pub enum PayloadLength {
-    U16,
-    U64,
+    pub headers: Headers,
+    pub opcode: Opcode,
+    pub payload: Vec<u8>,
 }

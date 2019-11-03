@@ -46,4 +46,5 @@ window.addEventListener('load', async () => {
   const input = document.getElementById('input');
   const output = document.getElementById('output');
   const chat = new Chat(ws, input, output);
+  window.chat = chat;
 });
