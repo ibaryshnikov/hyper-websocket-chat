@@ -1,5 +1,4 @@
 use anyhow::Result;
-use futures::SinkExt;
 use hyper::upgrade::Upgraded;
 use hyper::{Body, Request, Response, StatusCode};
 use tokio::io::AsyncRead;
@@ -14,7 +13,7 @@ use crate::ClientsArc;
 
 async fn read_messages<T: AsyncRead + Unpin>(
     mut reader: T,
-    mut sender: Sender,
+    sender: Sender,
     clients: ClientsArc,
     id: u128,
     short_id: String,
@@ -26,7 +25,7 @@ async fn read_messages<T: AsyncRead + Unpin>(
                 Ok(msg) => {
                     println!("got message: {}", msg);
                     let reply = format!("{}: {}", short_id, msg);
-                    sender.send(text_event(reply, EventAddress::All)).await?;
+                    sender.send(text_event(reply, EventAddress::All))?;
                 }
                 Err(e) => println!("error parsing a string: {}", e),
             },
@@ -43,7 +42,7 @@ async fn read_messages<T: AsyncRead + Unpin>(
                 }
 
                 let msg = format!("{} leaving the server", short_id);
-                sender.send(text_event(msg, EventAddress::All)).await?;
+                sender.send(text_event(msg, EventAddress::All))?;
                 println!("Users in chat notified");
                 return Ok(());
             }
@@ -65,7 +64,7 @@ fn text_event(data: String, to: EventAddress) -> Event {
 
 async fn handle_upgraded_connection(
     upgraded: Upgraded,
-    mut sender: Sender,
+    sender: Sender,
     clients: ClientsArc,
     id: u128,
 ) -> Result<()> {
@@ -78,7 +77,7 @@ async fn handle_upgraded_connection(
     let short_id = format!("{:#x}", id)[2..10].to_owned();
 
     let msg = format!("{} joined the server", short_id);
-    sender.send(text_event(msg, EventAddress::All)).await?;
+    sender.send(text_event(msg, EventAddress::All))?;
 
     read_messages(reader, sender, clients, id, short_id).await?;
 
@@ -91,7 +90,7 @@ pub fn handle_ws(req: Request<Body>, sender: Sender, clients: ClientsArc) -> Res
 
     let sec_accept = generate_key_from(sec_key.as_bytes());
 
-    hyper::rt::spawn(async move {
+    tokio::task::spawn(async move {
         match req.into_body().on_upgrade().await {
             Ok(upgraded) => {
                 println!("upgraded");

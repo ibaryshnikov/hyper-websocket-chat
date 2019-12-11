@@ -6,7 +6,6 @@ use std::sync::Arc;
 extern crate anyhow;
 
 use anyhow::Result;
-
 use futures::future::try_join;
 use futures::TryFutureExt;
 use hyper::service::{make_service_fn, service_fn};
@@ -38,7 +37,7 @@ async fn request_router(
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let addr = "127.0.0.1:8081".parse()?;
+    let addr = "0.0.0.0:8081".parse()?;
 
     let clients = Arc::new(Mutex::new(HashMap::new()));
     let (sender, receiver) = unbounded_channel();

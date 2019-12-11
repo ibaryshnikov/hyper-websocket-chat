@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use hyper::upgrade::Upgraded;
+use tokio::io::WriteHalf;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::Mutex;
-use tokio_io::split::WriteHalf;
 
 use crate::ws::event::Event;
 
