@@ -27,18 +27,18 @@ pub fn encode_binary(msg: &[u8]) -> Vec<u8> {
 }
 
 pub async fn broadcast_buffer(
-    clients: &mut ClientsMap,
+    clients: ClientsRc,
     address: EventAddress,
     buffer: &[u8],
 ) -> Result<()> {
     match address {
         EventAddress::All => {
-            for writer in clients.values_mut() {
+            for writer in clients.borrow_mut().values_mut() {
                 writer.write_all(buffer).await?;
             }
         }
         EventAddress::Client(id) => {
-            if let Some(writer) = clients.get_mut(&id) {
+            if let Some(writer) = clients.borrow_mut().get_mut(&id) {
                 writer.write_all(buffer).await?;
             } else {
                 println!("Can't send message, client {} not found", id);
@@ -46,7 +46,7 @@ pub async fn broadcast_buffer(
         }
         EventAddress::ClientRange(list) => {
             for id in list {
-                if let Some(writer) = clients.get_mut(&id) {
+                if let Some(writer) = clients.borrow_mut().get_mut(&id) {
                     writer.write_all(buffer).await?;
                 } else {
                     println!("Can't send message, client {} not found", id);
@@ -57,19 +57,18 @@ pub async fn broadcast_buffer(
     Ok(())
 }
 
-pub async fn broadcast(mut stream: Receiver, clients: ClientsArc) -> Result<()> {
+pub async fn broadcast(mut stream: Receiver, clients: ClientsRc) -> Result<()> {
     while let Some(event) = stream.next().await {
         let buffer = match event.kind {
             EventKind::Text => encode_text(&event.payload),
             EventKind::Binary => encode_binary(&event.payload),
             EventKind::Close => encode_close_frame(),
         };
-        let mut clients = clients.lock().await;
         println!("broadcasting {:?} to {:?}", event.kind, event.address);
         if let EventAddress::All = event.address {
-            println!("clients connected: {}", clients.len());
+            println!("clients connected: {}", clients.borrow().len());
         }
-        broadcast_buffer(&mut *clients, event.address, &buffer).await?;
+        broadcast_buffer(clients.clone(), event.address, &buffer).await?;
     }
 
     println!("Stopping writing messages");

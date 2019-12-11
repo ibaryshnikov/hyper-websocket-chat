@@ -9,12 +9,12 @@ use crate::ws::event::*;
 use crate::ws::handshake::generate_key_from;
 use crate::ws::opcode::Opcode;
 use crate::ws::*;
-use crate::ClientsArc;
+use crate::ClientsRc;
 
 async fn read_messages<T: AsyncRead + Unpin>(
     mut reader: T,
     sender: Sender,
-    clients: ClientsArc,
+    clients: ClientsRc,
     id: u128,
     short_id: String,
 ) -> Result<()> {
@@ -31,7 +31,7 @@ async fn read_messages<T: AsyncRead + Unpin>(
             },
             Opcode::Close => {
                 println!("Got CLOSE opcode, closing connection");
-                if let Some(writer) = clients.lock().await.get_mut(&id) {
+                if let Some(writer) = clients.borrow_mut().get_mut(&id) {
                     send_directly(writer, id, EventKind::Close, &frame.payload).await?;
                     println!("CLOSE reply sent");
                 } else {
@@ -65,14 +65,14 @@ fn text_event(data: String, to: EventAddress) -> Event {
 async fn handle_upgraded_connection(
     upgraded: Upgraded,
     sender: Sender,
-    clients: ClientsArc,
+    clients: ClientsRc,
     id: u128,
 ) -> Result<()> {
     let (reader, mut writer) = tokio::io::split(upgraded);
 
     send_directly(&mut writer, id, EventKind::Text, b"Welcome to chat server!").await?;
 
-    clients.lock().await.insert(id, writer);
+    clients.borrow_mut().insert(id, writer);
 
     let short_id = format!("{:#x}", id)[2..10].to_owned();
 
@@ -84,13 +84,13 @@ async fn handle_upgraded_connection(
     Ok(())
 }
 
-pub fn handle_ws(req: Request<Body>, sender: Sender, clients: ClientsArc) -> Response<Body> {
+pub fn handle_ws(req: Request<Body>, sender: Sender, clients: ClientsRc) -> Response<Body> {
     println!("ws incoming connection");
     let sec_key = req.headers().get("sec-websocket-key").unwrap();
 
     let sec_accept = generate_key_from(sec_key.as_bytes());
 
-    tokio::task::spawn(async move {
+    tokio::task::spawn_local(async move {
         match req.into_body().on_upgrade().await {
             Ok(upgraded) => {
                 println!("upgraded");
@@ -102,7 +102,7 @@ pub fn handle_ws(req: Request<Body>, sender: Sender, clients: ClientsArc) -> Res
                 } else {
                     println!("closing upgraded connection")
                 }
-                clients.lock().await.remove(&id);
+                clients.borrow_mut().remove(&id);
             }
             Err(e) => println!("upgrade error: {}", e),
         }

@@ -42,9 +42,8 @@ class Chat {
 }
 
 window.addEventListener('load', async () => {
-  const ws = new WebSocket("ws://localhost:8081/ws");
+  const ws = new WebSocket(`ws://${location.hostname}:8081/ws`);
   const input = document.getElementById('input');
   const output = document.getElementById('output');
-  const chat = new Chat(ws, input, output);
-  window.chat = chat;
+  window.chat = new Chat(ws, input, output);
 });
