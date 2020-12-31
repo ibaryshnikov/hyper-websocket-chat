@@ -84,14 +84,14 @@ async fn handle_upgraded_connection(
     Ok(())
 }
 
-pub fn handle_ws(req: Request<Body>, sender: Sender, clients: ClientsRc) -> Response<Body> {
+pub fn handle_ws(mut req: Request<Body>, sender: Sender, clients: ClientsRc) -> Response<Body> {
     println!("ws incoming connection");
     let sec_key = req.headers().get("sec-websocket-key").unwrap();
 
     let sec_accept = generate_key_from(sec_key.as_bytes());
 
     tokio::task::spawn_local(async move {
-        match req.into_body().on_upgrade().await {
+        match hyper::upgrade::on(&mut req).await {
             Ok(upgraded) => {
                 println!("upgraded");
                 let id = Uuid::new_v4().to_u128_le();

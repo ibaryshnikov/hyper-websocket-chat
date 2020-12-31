@@ -34,9 +34,8 @@ where
 }
 
 fn main() -> Result<()> {
-    let mut runtime = tokio::runtime::Builder::new()
+    let mut runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
-        .basic_scheduler()
         .build()
         .expect("Should build runtime");
 

@@ -1,5 +1,4 @@
 use anyhow::Result;
-use futures::StreamExt;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
 use super::encoding::encode_length;
@@ -58,7 +57,7 @@ pub async fn broadcast_buffer(
 }
 
 pub async fn broadcast(mut stream: Receiver, clients: ClientsRc) -> Result<()> {
-    while let Some(event) = stream.next().await {
+    while let Some(event) = stream.recv().await {
         let buffer = match event.kind {
             EventKind::Text => encode_text(&event.payload),
             EventKind::Binary => encode_binary(&event.payload),
