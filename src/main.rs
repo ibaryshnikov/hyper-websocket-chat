@@ -34,13 +34,13 @@ where
 }
 
 fn main() -> Result<()> {
-    let mut runtime = tokio::runtime::Builder::new_current_thread()
+    let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("Should build runtime");
 
     let local = tokio::task::LocalSet::new();
-    local.block_on(&mut runtime, serve())?;
+    local.block_on(&runtime, serve())?;
 
     Ok(())
 }
