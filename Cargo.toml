@@ -5,16 +5,16 @@ authors = ["ibaryshnikov"]
 edition = "2018"
 
 [dependencies]
-anyhow = "1.0.37"
+anyhow = "1.0.53"
 base64 = "0.13.0"
-futures = "0.3.8"
-sha-1 = "0.9.2"
+futures = "0.3.19"
+sha-1 = "0.10.0"
 uuid = { version = "0.8.1", features = ["v4"] }
 
 [dependencies.hyper]
-version = "0.14.2"
+version = "0.14.16"
 features = ["server", "http1", "tcp"]
 
 [dependencies.tokio]
-version = "1.0.1"
+version = "1.15.0"
 features = ["sync", "io-util"]
